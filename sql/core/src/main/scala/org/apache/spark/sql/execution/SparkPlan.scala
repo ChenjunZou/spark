@@ -21,11 +21,9 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, Da
 
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.ExecutionContext
-
 import org.codehaus.commons.compiler.CompileException
 import org.codehaus.janino.InternalCompilerException
-
-import org.apache.spark.{broadcast, SparkEnv}
+import org.apache.spark.{SparkEnv, broadcast}
 import org.apache.spark.internal.Logging
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rdd.{RDD, RDDOperationScope}
@@ -35,6 +33,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.{Predicate => GenPredicate, _}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.plans.physical._
+import org.apache.spark.sql.execution.PlanState.PlanState
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.ThreadUtils
@@ -52,6 +51,8 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
    * populated by the query planning infrastructure.
    */
   @transient final val sqlContext = SparkSession.getActiveSession.map(_.sqlContext).orNull
+
+  var state: PlanState = PlanState.NotStart
 
   protected def sparkContext = sqlContext.sparkContext
 
@@ -144,6 +145,14 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
     doExecuteBroadcast()
   }
 
+  def postQuery(): Unit = {
+    if (children.forall(_.state == PlanState.Success)) {
+      state = PlanState.Success
+    } else {
+      state = PlanState.Failed
+    }
+  }
+
   /**
    * Executes a query after preparing the query and adding query plan information to created RDDs
    * for visualization.
@@ -152,7 +161,9 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
     RDDOperationScope.withScope(sparkContext, nodeName, false, true) {
       prepare()
       waitForSubqueries()
-      query
+      val tmp = query
+      postQuery()
+      tmp
     }
   }
 
@@ -429,6 +440,9 @@ object SparkPlan {
 trait LeafExecNode extends SparkPlan {
   override final def children: Seq[SparkPlan] = Nil
   override def producedAttributes: AttributeSet = outputSet
+  override def postQuery(): Unit = {
+    state = PlanState.Success
+  }
 }
 
 object UnaryExecNode {

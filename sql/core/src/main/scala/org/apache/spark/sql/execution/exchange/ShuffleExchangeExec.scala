@@ -131,6 +131,14 @@ case class ShuffleExchangeExec(
     }
     cachedShuffleRDD
   }
+
+  protected override def postQuery(): Unit = {
+    if (metrics("dataSize").value > 0) {
+      state = PlanState.Success
+    } else {
+      state = PlanState.Failed
+    }
+  }
 }
 
 object ShuffleExchangeExec {
